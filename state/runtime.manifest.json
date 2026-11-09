@@ -1,0 +1,7 @@
+{
+  "format": "fernet-state-tar-gz-v2",
+  "created_utc": "2026-11-09T03:26:52.385141+00:00",
+  "file_count": 193,
+  "plaintext_tar_sha256": "da7ee367294b2e6372f8f109c8faed9a4a179e2f3cbc8dddf5110d92f0900d2e",
+  "ciphertext_bytes": 1252664
+}
