@@ -78,7 +78,7 @@ jobs:
             echo '{}' > data/chats.json
             exit 0
           fi
-          if ! git checkout bot-state -- state/runtime.fernet state/runtime.manifest.json; then
+          if ! (git show bot-state:state/runtime.fernet > state/runtime.fernet && git show bot-state:state/runtime.manifest.json > state/runtime.manifest.json); then
             if [ "$LIVE" = "true" ]; then
               echo "fail-closed: bot-state missing encrypted runtime artifacts"
               exit 1
@@ -89,8 +89,7 @@ jobs:
             echo '{}' > data/chats.json
             exit 0
           fi
-          # Return to workflow ref
-          git checkout --force "$GITHUB_SHA"
+          # Extract without changing index: main intentionally contains no state.
           echo "state_missing=false" >> "$GITHUB_OUTPUT"
 
       - name: Restore encrypted state
