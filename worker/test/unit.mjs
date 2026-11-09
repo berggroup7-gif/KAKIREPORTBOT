@@ -29,6 +29,13 @@ const me = { id: 4242, username: "KAKIREPORTBOT" };
 eq(R.isOwnerCall({ from: { username: "Boss" }, text: "kr mana" }, me, "boss"), true);
 eq(R.isBotCall({ from: { id: 5 }, text: "kr tu senyap" }, me), false);
 eq(R.isBotCall({ from: { id: 5 }, text: "hai @kakireportbot" }, me), true);
+eq(R.isBotCall({ from: { id: 5 }, text: "wan tiger mana" }, me), true);
+eq(R.isBotCall({ from: { id: 5 }, text: "Wan Tiger" }, me), true);
+eq(R.isBotCall({ from: { id: 5 }, text: "wantiger ye" }, me), true);
+eq(R.isBotCall({ from: { id: 5 }, text: "wan tiger tu senyap" }, me), false);
+eq(R.postProcess("Wan Tiger: haha ye"), "haha ye");
+eq(R.TO_BOT_RE.test("eh wan tiger ada ke"), true);
+eq(R.style("boss").startsWith("Kau ialah Wan Tiger,"), true);
 eq(R.isReportRequest({ from: { username: "boss" }, text: "@KAKIREPORTBOT bagi report semalam" }, me, "boss"), true);
 eq(R.isReportRequest({ from: { username: "orang" }, text: "@KAKIREPORTBOT bagi report semalam" }, me, "boss"), false);
 

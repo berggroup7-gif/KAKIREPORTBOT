@@ -57,7 +57,7 @@ export function buildPrompt(m, nm, isCall, { owner, history, nicks, prefs, yctx 
   let task;
   if (isCall && isOwner) task = "Ketua sedang memanggil/bercakap terus dengan kau. Jawab dia sekarang (wajib balas, jangan SKIP).";
   else if (isCall) task = "Orang ni sedang bercakap terus dengan kau (tag, reply atau panggil nama kau). Jawab dia sekarang, panggil dia dengan nama panggilan yang betul (wajib balas, jangan SKIP).";
-  else task = "Putuskan sama ada mesej ini patut dibalas. Balas kalau ia soalan, lawak, sapaan yang ada isi, kongsi link MP, atau ditujukan pada KR. " +
+  else task = "Putuskan sama ada mesej ini patut dibalas. Balas kalau ia soalan, lawak, sapaan yang ada isi, kongsi link MP, atau ditujukan pada Wan Tiger. " +
     "Kalau tak perlu (sembang biasa antara orang lain, tiada apa nak ditambah), jawab tepat SKIP.";
   return `Sembang terkini dalam group:\n${ctx}\n\n${LINK_RE.test(t) ? yctx || "" : ""}\n\nMesej sasaran daripada ${nm}${isOwner ? " (ketua)" : ""}: ${t}${rtx}${prefCtx(prefs, (m.from || {}).id)}\n\n${task}\nTulis jawapan kau sahaja.`;
 }
@@ -75,7 +75,7 @@ export function postProcess(out) {
   if (!out) return null;
   out = pyStrip(out).replace(/^"+|"+$/g, "");
   out = stripEmoji(out);
-  out = out.replace(/^(KR|Kaki Report)\s*:\s*/i, "");
+  out = out.replace(/^(KR|Kaki Report|Wan Tiger)\s*:\s*/i, "");
   if (!out || /^[^\p{L}\p{N}_]*SKIP[^\p{L}\p{N}_]*$/iu.test(out) || out.toUpperCase().startsWith("SKIP")) return "SKIP";
   if (BAD.test(out)) return "SKIP";
   out = out.replace(pyRe(String.raw`\baku\b`, "g"), "saya").replace(pyRe(String.raw`\bAku\b`, "g"), "Saya");
@@ -92,7 +92,7 @@ export function prefEntry(m, owner, nicks) {
 }
 
 // ---- call detection (logger.py) ----
-const NAME_P = String.raw`(?:kaki\s*report|kakireport|kr)`;
+const NAME_P = String.raw`(?:wan\s*tiger|wantiger|kaki\s*report|kakireport|kr)`;
 const VOC_START = pyRe(String.raw`^\W*(?:(?:hai|hoi|oi|weh|woi|wei|eh|hello|helo|hey)\s+)?` + NAME_P + String.raw`\b(?!\s*(?:tu|ni|tadi|dia)\b)`, "i");
 const VOC_END = pyRe(String.raw`(?:^|\b(?:hai|hoi|oi|weh|woi|wei|eh|hello|helo|hey|mana|mari|sini|jom|tolong|ya|ye)\s+)` + NAME_P + String.raw`\W*$`, "i");
 const THIRD = pyRe(String.raw`\b(dia|bot\s+tu|bot\s+ni)\b|` + NAME_P + String.raw`\s+(?:tu|ni|tadi)\b`, "i");
@@ -127,7 +127,7 @@ export const pickAck = (t, last) => pick(ACKS[classify(t)].filter((x) => x !== l
 export const pickOtherAck = (last) => pick(OTHER_ACKS.filter((x) => x !== last));
 
 // queue priority (gemini_reply.prio)
-export const TO_BOT_RE = /kaki\s*report|\bkr\b|@kakireportbot/i;
+export const TO_BOT_RE = /wan\s*tiger|wantiger|kaki\s*report|\bkr\b|@kakireportbot/i;
 export const prio = (it) => (it.toBot ? 3 : 0) + (it.text.includes("?") ? 2 : 0) + (it.text.includes("links.tngdigital.com.my") ? 1 : 0);
 
 // ---- report share request (logger.maybe_share_report) ----
@@ -147,7 +147,7 @@ export function isReportRequest(m, me, owner) {
   const rt = (m.reply_to_message || {}).from || {};
   if (!t.toLowerCase().includes(tag) && rt.id !== me.id) return false;
   let clean = t.split(new RegExp(tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi")).join(" ");
-  clean = clean.replace(pyRe(String.raw`kaki\s*report|\bKR\b`, "gi"), " ");
+  clean = clean.replace(pyRe(String.raw`wan\s*tiger|wantiger|kaki\s*report|\bKR\b`, "gi"), " ");
   return REQ_RE.test(pyStrip(clean));
 }
 

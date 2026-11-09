@@ -7,7 +7,7 @@ import * as R from "./reply.js";
 import { HELP } from "./persona.js";
 import { pyStrip, pySplit, cpSlice, cpLen } from "./pyre.js";
 
-const CODE_VERSION = "2026-11-09.6";
+const CODE_VERSION = "2026-11-09.7";
 const log = (ev, x = {}) => console.log(JSON.stringify({ ev, ...x }));
 const truthy = (v) => ["1", "true", "yes", "on"].includes(String(v || "").toLowerCase());
 const READ_ONLY = new Set(["getMe", "getChat", "getChatAdministrators", "getChatMember", "getWebhookInfo"]);
@@ -197,7 +197,7 @@ export class BotState {
       try { const x = JSON.parse(r.rec); if ((x.type || "message") === "message" && !x.edited && x.chat_id === this.cfg.groupId && !(x.text || "").startsWith("/")) rows.push([x.ts.slice(0, 19), x.message_id, this.nameOf({ username: x.username, first_name: x.sender }), x.text || ""]); } catch {}
       if (rows.length >= 40) break;
     }
-    for (const r of this.sql.exec("SELECT ts, text FROM replies WHERE ok = 1 AND kind IN ('gemini', 'direct', 'ketua-call') ORDER BY rowid DESC LIMIT 15")) if (r.ts.startsWith(day) && r.text) rows.push([r.ts.slice(0, 19), null, "KR", r.text]);
+    for (const r of this.sql.exec("SELECT ts, text FROM replies WHERE ok = 1 AND kind IN ('gemini', 'direct', 'ketua-call') ORDER BY rowid DESC LIMIT 15")) if (r.ts.startsWith(day) && r.text) rows.push([r.ts.slice(0, 19), null, "Wan Tiger", r.text]);
     rows.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
     return rows.slice(-R.HISTORY_MAX).map(([, id, n, t]) => [id, n, cpSlice(t, 0, 300)]);
   }
@@ -388,7 +388,7 @@ export class BotState {
     try { g = await this.genReply(m, true, 10000); } catch (e) { log("gemini_call_err", { msg: String(e && e.message).slice(0, 80) }); }
     const line = g && g !== "SKIP" ? g : R.pickAck(t, this.lastAck);
     const r = await this.replyTo(m, line);
-    this.lastAck = line; this.handled.add(m.message_id); this.pushHistory((r || {}).message_id ?? null, "KR", line);
+    this.lastAck = line; this.handled.add(m.message_id); this.pushHistory((r || {}).message_id ?? null, "Wan Tiger", line);
     const acks = this.kvGet("instant_acks", []);
     acks.push({ message_id: m.message_id, text: t, ack_message_id: (r || {}).message_id ?? null, ack_text: line, kind: R.classify(t), ts: S.isoMyt(this.now(), true) });
     this.kvSet("instant_acks", acks.slice(-300));
@@ -405,7 +405,7 @@ export class BotState {
     try { g = await this.genReply(m, true, 12000); } catch (e) { log("gemini_direct_err", { msg: String(e && e.message).slice(0, 80) }); }
     const line = g && g !== "SKIP" ? g : R.pickOtherAck(this.lastAck);
     const r = await this.replyTo(m, line);
-    this.lastAck = line; this.handled.add(m.message_id); this.pushHistory((r || {}).message_id ?? null, "KR", line);
+    this.lastAck = line; this.handled.add(m.message_id); this.pushHistory((r || {}).message_id ?? null, "Wan Tiger", line);
     this.logReply(m.message_id, true, "direct", line);
     log("reply", { kind: "direct", mid: m.message_id, gemini: !!(g && g !== "SKIP") });
   }
@@ -462,7 +462,7 @@ export class BotState {
           const sent = await this.replyTo(m, r).catch((e) => { log("send_failed", { msg: String(e.message).slice(0, 80) }); this.logReply(m.message_id, false, "gemini", ""); return null; });
           if (sent) {
             this.lastSend = this.now(); this.sentTimes.push(this.lastSend); this.userLast.set(m.from.id, this.lastSend);
-            this.pushHistory(sent.message_id ?? null, "KR", r); this.logReply(m.message_id, true, "gemini", r);
+            this.pushHistory(sent.message_id ?? null, "Wan Tiger", r); this.logReply(m.message_id, true, "gemini", r);
             log("reply", { kind: "gemini", mid: m.message_id, prio: R.prio(c.pick) });
           }
         } else {
