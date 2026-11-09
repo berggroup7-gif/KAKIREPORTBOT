@@ -1,0 +1,14 @@
+{
+  "name": "kakireportbot-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "KAKIREPORTBOT on Cloudflare Workers (Telegram webhook, Durable Object state)",
+  "scripts": {
+    "test": "node test/unit.mjs",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.158.0"
+  }
+}

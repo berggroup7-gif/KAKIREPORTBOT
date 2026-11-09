@@ -1,0 +1,37 @@
+name = "kakireportbot"
+main = "src/index.js"
+compatibility_date = "2026-11-01"
+workers_dev = true
+
+# All bot state (raw chat log, stats, settings) lives in one SQLite-backed
+# Durable Object. SQLite Durable Objects are included in the Workers Free plan.
+[[durable_objects.bindings]]
+name = "STATE"
+class_name = "BotState"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["BotState"]
+
+# Hourly: finalise winners after midnight / week / month end (MYT) and prune old periods.
+[triggers]
+crons = ["5 * * * *"]
+
+[vars]
+BOT_USERNAME = "KAKIREPORTBOT"
+DRY_RUN = "0"
+GAP_SEC = "60"
+WINDOW_SEC = "300"
+MAX_PER_WINDOW = "5"
+MAX_AGE_SEC = "600"
+GEMINI_GAP_SEC = "20"
+PER_USER_FLOOR_SEC = "120"
+CALL_COOLDOWN_SEC = "30"
+DAILY_CAP = "1200"
+
+# Secrets (wrangler secret put NAME; never in this file):
+# TELEGRAM_BOT_TOKEN, GEMINI_API_KEY, WEBHOOK_SECRET, ADMIN_SECRET,
+# GROUP_CHAT_ID, OWNER_ID, OWNER_USERNAME
+
+[observability]
+enabled = true
