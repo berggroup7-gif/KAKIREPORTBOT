@@ -10,8 +10,8 @@ Python bot in the repo root, which stays for rollback.
 - `src/reply.js`, `src/persona.js` – port of `gemini_reply.py` / `logger.py` (persona, filters, prompt, call detection).
 - Hourly cron: finalise winners after a day/week/month ends (MYT) and prune periods older than 95 days.
 
-Reply rules: commands answered at once; ketua calling KR and anyone tagging/replying to the bot get an
-immediate Gemini reply; other messages go to a queue answered at most once per 60 s, 5 per 5 min,
+Reply rules: commands answered at once; ketua calling KR gets an immediate Gemini reply; anyone else
+tagging/replying to/calling the bot gets an immediate reply (max one per 30 s group-wide, 120 s per person, message under 2 min old); other messages go to a queue answered at most once per 60 s, 5 per 5 min,
 one Gemini call per 20 s, per-person cooldown max(120 s, /had), 1200 Gemini calls/day, messages older than 10 min skipped.
 
 ## Deploy / migrate

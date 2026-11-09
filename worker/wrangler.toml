@@ -26,7 +26,9 @@ MAX_PER_WINDOW = "5"
 MAX_AGE_SEC = "600"
 GEMINI_GAP_SEC = "20"
 PER_USER_FLOOR_SEC = "120"
-CALL_COOLDOWN_SEC = "30"
+CALL_COOLDOWN_SEC = "120"
+DIRECT_GAP_SEC = "30"
+DIRECT_MAX_AGE_SEC = "120"
 DAILY_CAP = "1200"
 
 # Secrets (wrangler secret put NAME; never in this file):

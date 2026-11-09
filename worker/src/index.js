@@ -7,6 +7,7 @@ import * as R from "./reply.js";
 import { HELP } from "./persona.js";
 import { pyStrip, pySplit, cpSlice, cpLen } from "./pyre.js";
 
+const CODE_VERSION = "2026-11-09.5";
 const log = (ev, x = {}) => console.log(JSON.stringify({ ev, ...x }));
 const truthy = (v) => ["1", "true", "yes", "on"].includes(String(v || "").toLowerCase());
 const READ_ONLY = new Set(["getMe", "getChat", "getChatAdministrators", "getChatMember", "getWebhookInfo"]);
@@ -41,6 +42,8 @@ export function config(env) {
     callGap: Number(env.GEMINI_GAP_SEC || 20) * 1000,
     perUserFloor: Number(env.PER_USER_FLOOR_SEC || 120) * 1000,
     callCooldown: Number(env.CALL_COOLDOWN_SEC || 30) * 1000,
+    directGap: Number(env.DIRECT_GAP_SEC || 15) * 1000,
+    directMaxAge: Number(env.DIRECT_MAX_AGE_SEC || 120) * 1000,
     dailyCap: Number(env.DAILY_CAP || 1200),
     warnGap: 120 * 1000,
   };
@@ -150,7 +153,7 @@ export class BotState {
     const M = (o) => new Map(Object.entries(o || {}).map(([k, v]) => [Number.isNaN(Number(k)) ? k : Number(k), v]));
     this.q = rt.q || []; this.handled = new Set(rt.handled || []); this.acked = new Set(rt.acked || []); this.sentTimes = rt.sentTimes || [];
     this.userLast = M(rt.userLast); this.callLast = M(rt.callLast); this.warned = M(rt.warned);
-    this.lastSend = rt.lastSend || 0; this.lastCall = rt.lastCall || 0; this.lastAck = rt.lastAck || null;
+    this.lastSend = rt.lastSend || 0; this.lastCall = rt.lastCall || 0; this.lastDirect = rt.lastDirect || 0; this.lastAck = rt.lastAck || null;
     this.stats.tiny = new Map(Object.entries(rt.tiny || {})); this.stats.burstPen = new Map(Object.entries(rt.burstPen || {}));
     this.rtSaved = JSON.stringify(rt);
     this.busy = false; this.alarmAt = null;
@@ -162,7 +165,7 @@ export class BotState {
     const rt = {
       q: this.q.filter((x) => now - x.ts < this.cfg.maxAge), handled: [...this.handled].slice(-300), acked: [...this.acked].slice(-300),
       sentTimes: this.sentTimes.filter((t) => now - t <= this.cfg.window), userLast: keep(this.userLast, 86400000), callLast: keep(this.callLast, 3600000),
-      warned: keep(this.warned, 3600000), lastSend: this.lastSend, lastCall: this.lastCall, lastAck: this.lastAck,
+      warned: keep(this.warned, 3600000), lastSend: this.lastSend, lastDirect: this.lastDirect, lastCall: this.lastCall, lastAck: this.lastAck,
       tiny: Object.fromEntries([...this.stats.tiny].map(([k, v]) => [k, v.filter((t) => nowS - t < 300)]).filter(([, v]) => v.length)),
       burstPen: Object.fromEntries([...this.stats.burstPen].filter(([, v]) => nowS - v < 300)),
     };
@@ -340,7 +343,15 @@ export class BotState {
     if (old) { out.step += "_old"; return out; }
     if (R.isReportRequest(m, cfg.me, cfg.owner)) { out.tasks.push(["share", () => this.shareReport(m)]); out.step += "_share"; return out; }
     if (R.isOwnerCall(m, cfg.me, cfg.owner)) { out.tasks.push(["owner", () => this.instantAck(m)]); out.step += "_ownercall"; return out; }
-    if (R.isBotCall(m, cfg.me)) { out.tasks.push(["call", () => this.directReply(m)]); out.step += "_call"; return out; }
+    if (R.isBotCall(m, cfg.me)) {
+      // Direct calls answer at once, but at most one per DIRECT_GAP_SEC across the group and only
+      // for fresh messages; otherwise they wait in the normal queue (with to-bot priority).
+      const now = this.now();
+      if (now - ts <= cfg.directMaxAge && now - (this.lastDirect || 0) >= cfg.directGap && !this.acked.has(m.message_id)
+          && now - (this.callLast.get(f.id) || 0) >= cfg.callCooldown && this.settings.replies_on) {
+        this.lastDirect = now; out.tasks.push(["call", () => this.directReply(m)]); out.step += "_call"; return out;
+      }
+    }
     if (this.enqueue(m)) { out.tasks.push(["pump", () => this.pump()]); out.step += "_queued"; }
     return out;
   }
@@ -618,6 +629,7 @@ export class BotState {
     }
     if (cmd === "import/report") { this.sql.exec("INSERT OR REPLACE INTO reports (day, text) VALUES (?, ?)", body.day, body.text); return J({ ok: true }); }
     if (cmd === "import/file") { this.sql.exec("INSERT OR REPLACE INTO files (path, content) VALUES (?, ?)", body.path, body.content); return J({ ok: true }); }
+    if (cmd === "raw") return J(this.sql.exec("SELECT seq, rec FROM raw WHERE day = ? AND seq >= ? ORDER BY seq LIMIT 2000", url.searchParams.get("day"), Number(url.searchParams.get("from") || 0)).toArray());
     if (cmd === "rawcount") return J(Object.fromEntries(this.sql.exec("SELECT day, count(*) AS n FROM raw GROUP BY day").toArray().map((r) => [r.day, r.n])));
     if (cmd === "stats") return J({ stats: this.stats.toPython(), winners: this.stats.winners, meta: this.meta, penalties: this.sql.exec("SELECT count(*) AS n FROM penalties").toArray()[0].n });
     if (cmd === "eval") {
@@ -628,7 +640,7 @@ export class BotState {
       } finally { this.fakeNow = null; }
     }
     if (cmd === "dry-log") { const l = this.kvGet("drylog", []); if (url.searchParams.get("clear")) { this.dryLog = []; this.kvSet("drylog", []); } return J(l); }
-    if (cmd === "debug") return J({ meta: this.meta, q: this.q.length, history: this.history.length, usage: this.usageToday(), started: this.started, lastSend: this.lastSend, alarmAt: this.alarmAt, settings: this.settings, chats: Object.keys(this.chats).length, files: this.sql.exec("SELECT count(*) AS n FROM files").toArray()[0].n, reports: this.sql.exec("SELECT day FROM reports").toArray().map((r) => r.day), dbSize: this.sql.databaseSize });
+    if (cmd === "debug") return J({ version: CODE_VERSION, lastDirect: this.lastDirect, meta: this.meta, q: this.q.length, history: this.history.length, usage: this.usageToday(), started: this.started, lastSend: this.lastSend, alarmAt: this.alarmAt, settings: this.settings, chats: Object.keys(this.chats).length, files: this.sql.exec("SELECT count(*) AS n FROM files").toArray()[0].n, reports: this.sql.exec("SELECT day FROM reports").toArray().map((r) => r.day), dbSize: this.sql.databaseSize });
     if (cmd === "replies") return J(this.sql.exec("SELECT ts, mid, ok, kind, substr(text, 1, 80) AS t FROM replies ORDER BY rowid DESC LIMIT ?", Number(url.searchParams.get("n") || 20)).toArray());
     if (cmd === "setcommands") return J(await this.setCommands());
     if (cmd === "meta") { if (body.lastUpdateId != null) { this.meta.lastUpdateId = Number(body.lastUpdateId); this.metaDirty = true; this.flushMeta(); } return J(this.meta); }
