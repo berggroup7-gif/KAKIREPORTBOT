@@ -11,7 +11,7 @@ Python bot in the repo root, which stays for rollback.
 - Hourly cron: finalise winners after a day/week/month ends (MYT) and prune periods older than 95 days.
 
 Reply rules: commands answered at once; ketua calling KR gets an immediate Gemini reply; anyone else
-tagging/replying to/calling the bot gets an immediate reply (max one per 30 s group-wide, 120 s per person, message under 2 min old); other messages go to a queue answered at most once per 60 s, 5 per 5 min,
+tagging/replying to/calling the bot gets an immediate reply (max one per 60 s group-wide, 120 s per person, message under 2 min old); other messages go to a queue answered at most once per 60 s, random 2–5 per 5 min,
 one Gemini call per 20 s, per-person cooldown max(120 s, /had), 1200 Gemini calls/day, messages older than 10 min skipped.
 
 ## Deploy / migrate

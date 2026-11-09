@@ -7,7 +7,7 @@ import * as R from "./reply.js";
 import { HELP } from "./persona.js";
 import { pyStrip, pySplit, cpSlice, cpLen } from "./pyre.js";
 
-const CODE_VERSION = "2026-11-09.5";
+const CODE_VERSION = "2026-11-09.6";
 const log = (ev, x = {}) => console.log(JSON.stringify({ ev, ...x }));
 const truthy = (v) => ["1", "true", "yes", "on"].includes(String(v || "").toLowerCase());
 const READ_ONLY = new Set(["getMe", "getChat", "getChatAdministrators", "getChatMember", "getWebhookInfo"]);
@@ -37,12 +37,13 @@ export function config(env) {
     geminiMock: truthy(env.GEMINI_MOCK),
     gap: Number(env.GAP_SEC || 60) * 1000, // min gap between queued (unsolicited) replies
     window: Number(env.WINDOW_SEC || 300) * 1000,
+    minWin: Number(env.MIN_PER_WINDOW || 2),
     maxWin: Number(env.MAX_PER_WINDOW || 5),
     maxAge: Number(env.MAX_AGE_SEC || 600) * 1000, // also: older messages get no unsolicited reply
     callGap: Number(env.GEMINI_GAP_SEC || 20) * 1000,
     perUserFloor: Number(env.PER_USER_FLOOR_SEC || 120) * 1000,
-    callCooldown: Number(env.CALL_COOLDOWN_SEC || 30) * 1000,
-    directGap: Number(env.DIRECT_GAP_SEC || 15) * 1000,
+    callCooldown: Number(env.CALL_COOLDOWN_SEC || 120) * 1000,
+    directGap: Number(env.DIRECT_GAP_SEC || 60) * 1000,
     directMaxAge: Number(env.DIRECT_MAX_AGE_SEC || 120) * 1000,
     dailyCap: Number(env.DAILY_CAP || 1200),
     warnGap: 120 * 1000,
@@ -153,7 +154,7 @@ export class BotState {
     const M = (o) => new Map(Object.entries(o || {}).map(([k, v]) => [Number.isNaN(Number(k)) ? k : Number(k), v]));
     this.q = rt.q || []; this.handled = new Set(rt.handled || []); this.acked = new Set(rt.acked || []); this.sentTimes = rt.sentTimes || [];
     this.userLast = M(rt.userLast); this.callLast = M(rt.callLast); this.warned = M(rt.warned);
-    this.lastSend = rt.lastSend || 0; this.lastCall = rt.lastCall || 0; this.lastDirect = rt.lastDirect || 0; this.lastAck = rt.lastAck || null;
+    this.lastSend = rt.lastSend || 0; this.lastCall = rt.lastCall || 0; this.lastDirect = rt.lastDirect || 0; this.lastAck = rt.lastAck || null; this.winTarget = rt.winTarget || 0;
     this.stats.tiny = new Map(Object.entries(rt.tiny || {})); this.stats.burstPen = new Map(Object.entries(rt.burstPen || {}));
     this.rtSaved = JSON.stringify(rt);
     this.busy = false; this.alarmAt = null;
@@ -165,7 +166,7 @@ export class BotState {
     const rt = {
       q: this.q.filter((x) => now - x.ts < this.cfg.maxAge), handled: [...this.handled].slice(-300), acked: [...this.acked].slice(-300),
       sentTimes: this.sentTimes.filter((t) => now - t <= this.cfg.window), userLast: keep(this.userLast, 86400000), callLast: keep(this.callLast, 3600000),
-      warned: keep(this.warned, 3600000), lastSend: this.lastSend, lastDirect: this.lastDirect, lastCall: this.lastCall, lastAck: this.lastAck,
+      warned: keep(this.warned, 3600000), lastSend: this.lastSend, lastDirect: this.lastDirect, lastCall: this.lastCall, lastAck: this.lastAck, winTarget: this.winTarget,
       tiny: Object.fromEntries([...this.stats.tiny].map(([k, v]) => [k, v.filter((t) => nowS - t < 300)]).filter(([, v]) => v.length)),
       burstPen: Object.fromEntries([...this.stats.burstPen].filter(([, v]) => nowS - v < 300)),
     };
@@ -344,7 +345,7 @@ export class BotState {
     if (R.isReportRequest(m, cfg.me, cfg.owner)) { out.tasks.push(["share", () => this.shareReport(m)]); out.step += "_share"; return out; }
     if (R.isOwnerCall(m, cfg.me, cfg.owner)) { out.tasks.push(["owner", () => this.instantAck(m)]); out.step += "_ownercall"; return out; }
     if (R.isBotCall(m, cfg.me)) {
-      // Direct calls answer at once, but at most one per DIRECT_GAP_SEC across the group and only
+      // Direct calls answer at once, but at most one per DIRECT_GAP_SEC (60s) across the group and only
       // for fresh messages; otherwise they wait in the normal queue (with to-bot priority).
       const now = this.now();
       if (now - ts <= cfg.directMaxAge && now - (this.lastDirect || 0) >= cfg.directGap && !this.acked.has(m.message_id)
@@ -426,7 +427,12 @@ export class BotState {
     if (!this.q.length) return null;
     if (now - this.lastSend < cfg.gap) return { wait: this.lastSend + cfg.gap };
     this.sentTimes = this.sentTimes.filter((t) => now - t <= cfg.window);
-    if (this.sentTimes.length >= cfg.maxWin) return { wait: this.sentTimes[0] + cfg.window + 1 };
+    // Each 5-min window picks a fresh target of 2..5 unsolicited replies (spread by GAP_SEC).
+    if (!this.sentTimes.length || !this.winTarget) {
+      const lo = Math.max(1, cfg.minWin), hi = Math.max(lo, cfg.maxWin);
+      this.winTarget = lo + Math.floor(Math.random() * (hi - lo + 1));
+    }
+    if (this.sentTimes.length >= this.winTarget) return { wait: this.sentTimes[0] + cfg.window + 1 };
     if (this.usageToday() >= cfg.dailyCap) return { wait: now + 60000 };
     if (!this.settings.replies_on) return { wait: now + 30000 };
     const per = this.perUser();
@@ -640,7 +646,7 @@ export class BotState {
       } finally { this.fakeNow = null; }
     }
     if (cmd === "dry-log") { const l = this.kvGet("drylog", []); if (url.searchParams.get("clear")) { this.dryLog = []; this.kvSet("drylog", []); } return J(l); }
-    if (cmd === "debug") return J({ version: CODE_VERSION, lastDirect: this.lastDirect, meta: this.meta, q: this.q.length, history: this.history.length, usage: this.usageToday(), started: this.started, lastSend: this.lastSend, alarmAt: this.alarmAt, settings: this.settings, chats: Object.keys(this.chats).length, files: this.sql.exec("SELECT count(*) AS n FROM files").toArray()[0].n, reports: this.sql.exec("SELECT day FROM reports").toArray().map((r) => r.day), dbSize: this.sql.databaseSize });
+    if (cmd === "debug") return J({ version: CODE_VERSION, lastDirect: this.lastDirect, winTarget: this.winTarget, sentTimes: this.sentTimes.length, limits: { directGap: this.cfg.directGap, callCooldown: this.cfg.callCooldown, gap: this.cfg.gap, minWin: this.cfg.minWin, maxWin: this.cfg.maxWin, window: this.cfg.window }, meta: this.meta, q: this.q.length, history: this.history.length, usage: this.usageToday(), started: this.started, lastSend: this.lastSend, alarmAt: this.alarmAt, settings: this.settings, chats: Object.keys(this.chats).length, files: this.sql.exec("SELECT count(*) AS n FROM files").toArray()[0].n, reports: this.sql.exec("SELECT day FROM reports").toArray().map((r) => r.day), dbSize: this.sql.databaseSize });
     if (cmd === "replies") return J(this.sql.exec("SELECT ts, mid, ok, kind, substr(text, 1, 80) AS t FROM replies ORDER BY rowid DESC LIMIT ?", Number(url.searchParams.get("n") || 20)).toArray());
     if (cmd === "setcommands") return J(await this.setCommands());
     if (cmd === "meta") { if (body.lastUpdateId != null) { this.meta.lastUpdateId = Number(body.lastUpdateId); this.metaDirty = true; this.flushMeta(); } return J(this.meta); }
