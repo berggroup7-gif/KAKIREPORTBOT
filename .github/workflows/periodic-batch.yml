@@ -1,0 +1,172 @@
+name: periodic-batch
+
+on:
+  workflow_dispatch:
+    inputs:
+      live_poll:
+        description: "Call Telegram getUpdates (requires PERIODIC_LIVE gates)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      allow_outbound:
+        description: "Allow command/reply sends (requires PERIODIC_OUTBOUND + NO_SEND=0)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      allow_gemini:
+        description: "Allow finite sync Gemini replies (requires outbound)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+  schedule:
+    # Every 5 minutes UTC; GitHub may delay under load.
+    - cron: "*/5 * * * *"
+
+concurrency:
+  # External cron + native schedule may both fire; queue, never cancel in-flight.
+  group: kakireportbot-periodic
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  batch:
+    runs-on: ubuntu-latest
+    # Schedule only when PERIODIC_ENABLED=true; dispatch always allowed
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      vars.PERIODIC_ENABLED == 'true'
+    timeout-minutes: 6
+    env:
+      # Defaults SAFE OFF. LIVE only when vars + inputs agree.
+      WANT_LIVE: ${{ (github.event_name == 'workflow_dispatch' && inputs.live_poll == 'true') || (github.event_name == 'schedule' && vars.PERIODIC_LIVE == 'true') }}
+      WANT_OUT: ${{ (github.event_name == 'workflow_dispatch' && inputs.allow_outbound == 'true' && vars.PERIODIC_OUTBOUND == 'true') || (github.event_name == 'schedule' && vars.PERIODIC_OUTBOUND == 'true') }}
+      WANT_GEM: ${{ (github.event_name == 'workflow_dispatch' && inputs.allow_gemini == 'true' && vars.PERIODIC_GEMINI == 'true') || (github.event_name == 'schedule' && vars.PERIODIC_GEMINI == 'true') }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: python3 -m pip install -r requirements.txt
+
+      - name: Fetch latest bot-state (fail-closed when live)
+        id: state
+        run: |
+          set -e
+          mkdir -p state data
+          LIVE="${WANT_LIVE}"
+          if [ "$LIVE" != "true" ]; then LIVE=false; fi
+          if ! git fetch origin bot-state:bot-state; then
+            if [ "$LIVE" = "true" ]; then
+              echo "fail-closed: cannot fetch bot-state for LIVE"
+              exit 1
+            fi
+            echo "state_missing=true" >> "$GITHUB_OUTPUT"
+            echo "0" > data/offset.txt
+            echo '{"periods":{},"names":{},"last_mid":{},"backfilled":true}' > data/stats.json
+            echo '{}' > data/chats.json
+            exit 0
+          fi
+          if ! git checkout bot-state -- state/runtime.fernet state/runtime.manifest.json; then
+            if [ "$LIVE" = "true" ]; then
+              echo "fail-closed: bot-state missing encrypted runtime artifacts"
+              exit 1
+            fi
+            echo "state_missing=true" >> "$GITHUB_OUTPUT"
+            echo "0" > data/offset.txt
+            echo '{"periods":{},"names":{},"last_mid":{},"backfilled":true}' > data/stats.json
+            echo '{}' > data/chats.json
+            exit 0
+          fi
+          # Return to workflow ref
+          git checkout --force "$GITHUB_SHA"
+          echo "state_missing=false" >> "$GITHUB_OUTPUT"
+
+      - name: Restore encrypted state
+        if: steps.state.outputs.state_missing != 'true'
+        env:
+          CHAT_BACKUP_KEY: ${{ secrets.CHAT_BACKUP_KEY }}
+        run: |
+          python3 tools/state_store.py load \
+            --archive state/runtime.fernet \
+            --manifest state/runtime.manifest.json \
+            --dest data
+
+      - name: Run bounded batch
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          CHAT_BACKUP_KEY: ${{ secrets.CHAT_BACKUP_KEY }}
+          GROUP_CHAT_ID: ${{ secrets.GROUP_CHAT_ID }}
+          OWNER_ID: ${{ secrets.OWNER_ID }}
+          OWNER_USERNAME: ${{ secrets.OWNER_USERNAME }}
+          BATCH_MAX_UPDATES: "50"
+          BATCH_MAX_SECONDS: "280"
+          BATCH_MAX_GEMINI: "4"
+          PERIODIC_CUTOFF_TS: ${{ vars.PERIODIC_CUTOFF_TS }}
+          # Controllable gates — default deny
+          NO_SEND: ${{ env.WANT_OUT == 'true' && '0' || '1' }}
+          DRY_RUN: ${{ env.WANT_LIVE == 'true' && '0' || '1' }}
+          PERIODIC_LIVE: ${{ env.WANT_LIVE == 'true' && '1' || '0' }}
+          PERIODIC_OUTBOUND: ${{ env.WANT_OUT == 'true' && '1' || '0' }}
+          PERIODIC_GEMINI: ${{ env.WANT_GEM == 'true' && '1' || '0' }}
+        run: |
+          set -e
+          ARGS=(--max-updates 50 --max-seconds 280 --max-gemini 4)
+          if [ "$PERIODIC_LIVE" = "1" ]; then
+            ARGS+=(--live-poll)
+          fi
+          if [ "$PERIODIC_OUTBOUND" = "1" ]; then
+            ARGS+=(--allow-outbound)
+          fi
+          if [ "$PERIODIC_GEMINI" = "1" ]; then
+            ARGS+=(--allow-gemini)
+          fi
+          python3 batch_runner.py "${ARGS[@]}"
+
+      - name: Save encrypted state snapshot
+        # Only after successful batch — durable checkpoint advances with publish below.
+        if: success() && steps.state.outputs.state_missing != 'true'
+        env:
+          CHAT_BACKUP_KEY: ${{ secrets.CHAT_BACKUP_KEY }}
+        run: |
+          python3 tools/state_store.py save \
+            --data-dir data \
+            --out state/runtime.fernet \
+            --manifest state/runtime.manifest.json
+
+      - name: Publish state to bot-state (fast-forward only)
+        # Fast-forward only (no force). Offset/seen/stats become durable only after this push.
+        if: success() && steps.state.outputs.state_missing != 'true'
+        run: |
+          set -e
+          git config user.name "berggroup7-gif"
+          git config user.email "354268335+berggroup7-gif@users.noreply.github.com"
+          STAGE="${RUNNER_TEMP}/kakireportbot-state-stage"
+          mkdir -p "$STAGE"
+          cp -f state/runtime.fernet "$STAGE/runtime.fernet"
+          cp -f state/runtime.manifest.json "$STAGE/runtime.manifest.json"
+          # Drop dirty state files so branch switch cannot abort
+          git fetch origin bot-state:bot-state
+          git checkout -f bot-state
+          mkdir -p state
+          cp -f "$STAGE/runtime.fernet" state/runtime.fernet
+          cp -f "$STAGE/runtime.manifest.json" state/runtime.manifest.json
+          git add state/runtime.fernet state/runtime.manifest.json
+          if git diff --cached --quiet; then
+            echo "no state change"
+            exit 0
+          fi
+          git commit -m "chore: update encrypted runtime state"
+          git push origin HEAD:bot-state
